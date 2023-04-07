@@ -196,7 +196,9 @@ func (rf *Raft) isCandidateLogUpToDate(candidateLastIndex int, candidateLastTerm
 	myLastIndex := rf.getLastLogIndex()
 	myLastTerm := rf.getLastLogTerm()
 
-	if candidateLastTerm == rf.currentTerm {
+	fmt.Println("isCandidateLogUpToDate", rf.me, "myLastIndex", myLastIndex, "myLastTerm", myLastTerm, "candidateLastIndex", candidateLastIndex, "candidateLastTerm", candidateLastTerm)
+	if candidateLastTerm == myLastTerm {
+		fmt.Println("Helloooooo")
 		return candidateLastIndex >= myLastIndex
 	}
 
@@ -208,6 +210,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (Lab-RA, Lab-RB).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	fmt.Println("Received RequestVote at ", rf.me, " my term: ", rf.currentTerm, "leader term: ", args.Term, "voted", reply.VoteGranted, "for", args.CandidateId)
 
 	reply.Term = rf.currentTerm
 	reply.VoteGranted = false
@@ -220,6 +223,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.becomeFollower(args.Term)
 	}
 
+	if args.Term > rf.currentTerm {
+		rf.votedFor = -1
+	}
+
+	fmt.Println("Candidate log ", rf.isCandidateLogUpToDate(args.LastLogIndex, args.LastLogTerm))
 	if (rf.votedFor < 0 || rf.votedFor == args.CandidateId) &&
 		rf.isCandidateLogUpToDate(args.LastLogIndex, args.LastLogTerm) {
 		reply.VoteGranted = true
@@ -228,7 +236,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.currentTerm = args.Term
 	}
 
-	fmt.Println("RequestVote at ", rf.me, " for term", rf.currentTerm, "voted", reply.VoteGranted, "for", args.CandidateId)
+	fmt.Println("RequestVote at ", rf.me, " my term: ", rf.currentTerm, "leader term: ", args.Term, "voted", reply.VoteGranted, "for", args.CandidateId)
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -259,6 +267,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // that the caller passes the address of the reply struct with &, not
 // the struct itself.
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
+	fmt.Println("sdend Request Vote ", args.CandidateId, "to server ", server, "term", args.Term)
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	return ok
 }
@@ -308,7 +317,7 @@ func (rf *Raft) startElection() {
 	rf.mu.Lock()
 
 	rf.becomeCandidate()
-	fmt.Println("Election timeout, start election by server ", rf.me, "for term ", rf.currentTerm, rf.lastHeartbeatTime, rf.electionTimeout)
+	fmt.Println("\n\nElection timeout, start election by server ", rf.me, "for term ", rf.currentTerm, rf.lastHeartbeatTime, rf.electionTimeout)
 
 	args := RequestVoteArgs{
 		Term:         rf.currentTerm,
@@ -320,6 +329,7 @@ func (rf *Raft) startElection() {
 
 	// reset vote channel
 	voteChannel := make(chan RequestVoteReply, len(rf.peers))
+	rf.lastHeartbeatTime = time.Now()
 	rf.mu.Unlock()
 
 	for server := range rf.peers {
@@ -331,28 +341,28 @@ func (rf *Raft) startElection() {
 					voteChannel <- reply
 				}
 			}(server, voteChannel)
+		}
 
-			for reply := range voteChannel {
-				rf.mu.Lock()
-				if rf.state != CANDIDATE {
-					rf.mu.Unlock()
-					return
-				}
+		for reply := range voteChannel {
+			rf.mu.Lock()
+			if rf.state != CANDIDATE {
 				rf.mu.Unlock()
-				rf.mu.Lock()
-				if reply.Term > rf.currentTerm {
-					rf.becomeFollower(reply.Term)
-					rf.mu.Unlock()
-					return
-				}
+				return
+			}
+			rf.mu.Unlock()
+			rf.mu.Lock()
+			if reply.Term > rf.currentTerm {
+				rf.becomeFollower(reply.Term)
 				rf.mu.Unlock()
+				return
+			}
+			rf.mu.Unlock()
 
-				if reply.VoteGranted {
-					voteCount++
-					if voteCount > len(rf.peers)/2 {
-						rf.becomeLeader(args.Term)
-						return
-					}
+			if reply.VoteGranted {
+				voteCount++
+				if voteCount > len(rf.peers)/2 {
+					rf.becomeLeader(args.Term)
+					return
 				}
 			}
 		}
@@ -420,9 +430,17 @@ func (rf *Raft) ticker() {
 		// }
 		// electionWait := <-rf.electionTimer.C
 		rf.mu.Lock()
+		fmt.Println("Ticker:", rf.me, "state: ", rf.state, rf.lastHeartbeatTime, rf.electionTimeout)
 		if rf.state == FOLLOWER && rf.lastHeartbeatTime.Add(rf.electionTimeout).UnixNano() < time.Now().UnixNano() {
 			rf.mu.Unlock()
-			rf.startElection()
+			go rf.startElection()
+			rf.mu.Lock()
+		}
+		rf.mu.Unlock()
+		rf.mu.Lock()
+		if rf.state == CANDIDATE && rf.lastHeartbeatTime.Add(rf.electionTimeout).UnixNano() < time.Now().UnixNano() {
+			rf.mu.Unlock()
+			rf.becomeFollower(rf.currentTerm)
 			rf.mu.Lock()
 		}
 		rf.mu.Unlock()
@@ -472,7 +490,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.logs = append(rf.logs, LogEntry{Term: 0})
 
 	rf.lastHeartbeatTime = time.Now()
-	rf.electionTimeout = time.Duration(250+(rand.Int63()%300)) * time.Millisecond
+	rf.electionTimeout = time.Duration(150+(rand.Int63()%500)) * time.Millisecond
 	rf.mu.Unlock()
 
 	// initialize from state persisted before a crash
