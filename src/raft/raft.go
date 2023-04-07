@@ -20,7 +20,6 @@ package raft
 import (
 	//	"bytes"
 
-	"fmt"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -180,7 +179,6 @@ func (rf *Raft) becomeLeader(term int) {
 	rf.nextIndex = make([]int, len(rf.peers))
 	rf.matchIndex = make([]int, len(rf.peers))
 	rf.mu.Unlock()
-	fmt.Println("Became leader", rf.me, "for term", rf.currentTerm)
 
 	rf.sendAppendEntries()
 }
@@ -200,7 +198,6 @@ func (rf *Raft) isCandidateLogUpToDate(candidateLastIndex int, candidateLastTerm
 	myLastIndex := rf.getLastLogIndex()
 	myLastTerm := rf.getLastLogTerm()
 
-	// fmt.Println("isCandidateLogUpToDate", rf.me, "myLastIndex", myLastIndex, "myLastTerm", myLastTerm, "candidateLastIndex", candidateLastIndex, "candidateLastTerm", candidateLastTerm)
 	if candidateLastTerm == myLastTerm {
 		return candidateLastIndex >= myLastIndex
 	}
@@ -213,7 +210,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (Lab-RA, Lab-RB).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	// fmt.Println("Received RequestVote at ", rf.me, " my term: ", rf.currentTerm, "leader term: ", args.Term, "for", args.CandidateId)
 
 	reply.Term = rf.currentTerm
 	reply.VoteGranted = false
@@ -230,7 +226,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.votedFor = -1
 	}
 
-	// fmt.Println("Candidate log ", rf.isCandidateLogUpToDate(args.LastLogIndex, args.LastLogTerm))
 	if (rf.votedFor < 0 || rf.votedFor == args.CandidateId) &&
 		rf.isCandidateLogUpToDate(args.LastLogIndex, args.LastLogTerm) {
 		reply.VoteGranted = true
@@ -239,7 +234,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.currentTerm = args.Term
 	}
 
-	// fmt.Println("RequestVote at ", rf.me, " my term: ", rf.currentTerm, "leader term: ", args.Term, "voted", reply.VoteGranted, "for", args.CandidateId)
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -270,7 +264,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // that the caller passes the address of the reply struct with &, not
 // the struct itself.
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
-	// fmt.Println("send Request Vote ", args.CandidateId, "to server ", server, "term", args.Term)
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	return ok
 }
@@ -292,9 +285,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := rf.currentTerm
 	isLeader := rf.state == LEADER
-	if isLeader {
-		fmt.Println("Start", command)
-	}
 
 	if isLeader {
 		index = rf.getLastLogIndex() + 1
@@ -330,7 +320,6 @@ func (rf *Raft) startElection() {
 	rf.mu.Lock()
 
 	rf.becomeCandidate()
-	// fmt.Println("\n\nElection timeout, start election by server ", rf.me, "for term ", rf.currentTerm, rf.lastHeartbeatTime, rf.electionTimeout)
 
 	args := RequestVoteArgs{
 		Term:         rf.currentTerm,
@@ -403,7 +392,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	defer rf.mu.Unlock()
 	reply.ServerId = rf.me
 	reply.Term = rf.currentTerm
-	fmt.Println("AppendEntries from", args.LeaderId, "to", rf.me, "term", args.Term, "prevLogIndex", args.PrevLogIndex, "prevLogTerm", args.PevLogTerm, "leaderCommit", args.LeaderCommit, "logEntries", args.LogEntries, "my commit", rf.commitIndex, "my term", rf.currentTerm, "my state", rf.state)
 	if args.Term < rf.currentTerm {
 		reply.Success = false
 	} else {
@@ -429,7 +417,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 func (rf *Raft) sendAppendEntries() {
 	for peer := range rf.peers {
-		// fmt.Println("sendAppendEntries at", peer)
 		go func(peerId int) {
 			rf.mu.Lock()
 			lastLogIndex := rf.getLastLogIndex()
@@ -447,7 +434,6 @@ func (rf *Raft) sendAppendEntries() {
 				return
 			}
 
-			// fmt.Println("Sent append entries to", peerId, "at", rf.me, "with term", rf.currentTerm, "and state", rf.state, "and lastHeartbeatTime", rf.lastHeartbeatTime)
 			rf.peers[peerId].Call("Raft.AppendEntries", &args, &reply)
 
 			rf.mu.Lock()
@@ -482,7 +468,6 @@ func (rf *Raft) updateCommitIndex() {
 			rf.applyCh <- ApplyMsg{Command: rf.logs[i].Command, CommandIndex: i, CommandValid: true}
 		}
 	}
-	fmt.Println("updateCommitIndex", rf.commitIndex, rf.logs)
 }
 
 func (rf *Raft) ticker() {
@@ -505,7 +490,6 @@ func (rf *Raft) ticker() {
 
 		if rf.state == LEADER {
 			rf.mu.Unlock()
-			// fmt.Println("Leader Heartbeat send append entries from ", rf.me, rf.lastHeartbeatTime, rf.electionTimeout)
 			rf.sendAppendEntries()
 			go rf.updateCommitIndex()
 			rf.mu.Lock()
