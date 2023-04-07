@@ -178,6 +178,11 @@ func (rf *Raft) becomeLeader(term int) {
 	rf.currentTerm = term
 	rf.nextIndex = make([]int, len(rf.peers))
 	rf.matchIndex = make([]int, len(rf.peers))
+
+	for i := range rf.peers {
+		rf.nextIndex[i] = rf.getLastLogIndex() + 1
+	}
+
 	rf.mu.Unlock()
 
 	rf.sendAppendEntries()
