@@ -420,10 +420,13 @@ func (rf *Raft) sendAppendEntries() {
 		go func(peerId int) {
 			rf.mu.Lock()
 			lastLogIndex := rf.getLastLogIndex()
+			log_temp := rf.logs[rf.matchIndex[peerId]+1 : lastLogIndex+1]
+			logs := make([]LogEntry, len(log_temp))
+			copy(logs, log_temp)
 			args := AppendEntriesArgs{
 				Term:         rf.currentTerm,
 				LeaderId:     rf.me,
-				LogEntries:   rf.logs[rf.matchIndex[peerId]+1 : lastLogIndex+1],
+				LogEntries:   logs,
 				PrevLogIndex: rf.matchIndex[peerId],
 				PevLogTerm:   rf.logs[rf.matchIndex[peerId]].Term,
 				LeaderCommit: rf.commitIndex,
