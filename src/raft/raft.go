@@ -228,7 +228,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.currentTerm = args.Term
 	}
 
-	fmt.Println("RequestVote", rf.me, "term", rf.currentTerm, "vote", reply.VoteGranted, "for", args.CandidateId)
+	fmt.Println("RequestVote at ", rf.me, " for term", rf.currentTerm, "voted", reply.VoteGranted, "for", args.CandidateId)
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -308,6 +308,7 @@ func (rf *Raft) startElection() {
 	rf.mu.Lock()
 
 	rf.becomeCandidate()
+	fmt.Println("Election timeout, start election by server ", rf.me, "for term ", rf.currentTerm, rf.lastHeartbeatTime, rf.electionTimeout)
 
 	args := RequestVoteArgs{
 		Term:         rf.currentTerm,
@@ -332,15 +333,19 @@ func (rf *Raft) startElection() {
 			}(server, voteChannel)
 
 			for reply := range voteChannel {
+				rf.mu.Lock()
 				if rf.state != CANDIDATE {
+					rf.mu.Unlock()
 					return
 				}
+				rf.mu.Unlock()
+				rf.mu.Lock()
 				if reply.Term > rf.currentTerm {
-					rf.mu.Lock()
 					rf.becomeFollower(reply.Term)
 					rf.mu.Unlock()
 					return
 				}
+				rf.mu.Unlock()
 
 				if reply.VoteGranted {
 					voteCount++
@@ -377,7 +382,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.lastHeartbeatTime = time.Now()
 		rf.state = FOLLOWER
 		rf.currentTerm = args.Term
-		fmt.Println("AppendEntries", rf.me, rf.currentTerm, rf.state, rf.lastHeartbeatTime)
+		fmt.Println("AppendEntries received by ", rf.me, "at term ", rf.currentTerm, " state ", rf.state, rf.lastHeartbeatTime)
 	}
 }
 
@@ -391,11 +396,14 @@ func (rf *Raft) sendAppendEntries() {
 	rf.mu.Unlock()
 
 	for peer := range rf.peers {
+		// fmt.Println("sendAppendEntries at", peer)
 		reply := AppendEntriesReply{}
 		go func(peerId int) {
-			if peerId != rf.me {
+			if peerId == rf.me {
 				return
 			}
+
+			fmt.Println("Sent append entries to", peerId, "at", rf.me, "with term", rf.currentTerm, "and state", rf.state, "and lastHeartbeatTime", rf.lastHeartbeatTime)
 			rf.peers[peerId].Call("Raft.AppendEntries", &args, &reply)
 		}(peer)
 	}
@@ -413,15 +421,16 @@ func (rf *Raft) ticker() {
 		// electionWait := <-rf.electionTimer.C
 		rf.mu.Lock()
 		if rf.state == FOLLOWER && rf.lastHeartbeatTime.Add(rf.electionTimeout).UnixNano() < time.Now().UnixNano() {
-			fmt.Println("Election timeout, start election", rf.me, "for term ", rf.currentTerm, rf.lastHeartbeatTime, rf.electionTimeout)
 			rf.mu.Unlock()
 			rf.startElection()
 			rf.mu.Lock()
 		}
 		rf.mu.Unlock()
+
 		rf.mu.Lock()
 		if rf.state == LEADER {
 			rf.mu.Unlock()
+			fmt.Println("Leader Heartbeat send append entries from ", rf.me, rf.lastHeartbeatTime, rf.electionTimeout)
 			rf.sendAppendEntries()
 			rf.mu.Lock()
 		}
@@ -463,7 +472,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.logs = append(rf.logs, LogEntry{Term: 0})
 
 	rf.lastHeartbeatTime = time.Now()
-	rf.electionTimeout = time.Duration(100+(rand.Int63()%300)) * time.Millisecond
+	rf.electionTimeout = time.Duration(250+(rand.Int63()%300)) * time.Millisecond
 	rf.mu.Unlock()
 
 	// initialize from state persisted before a crash
