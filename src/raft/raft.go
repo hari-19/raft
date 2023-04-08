@@ -89,6 +89,7 @@ type Raft struct {
 	// for election
 	lastHeartbeatTime time.Time
 	electionTimeout   time.Duration
+	timeoutConstant   int64
 }
 
 // return currentTerm and whether this server
@@ -337,7 +338,7 @@ func (rf *Raft) startElection() {
 	// reset vote channel
 	voteChannel := make(chan RequestVoteReply, len(rf.peers))
 	rf.lastHeartbeatTime = time.Now()
-	rf.electionTimeout = time.Duration(250+(rand.Int63()%300)) * time.Millisecond
+	rf.electionTimeout = time.Duration(rf.timeoutConstant+(rand.Int63()%300)) * time.Millisecond
 	rf.mu.Unlock()
 
 	for server := range rf.peers {
@@ -387,15 +388,13 @@ type AppendEntriesArgs struct {
 }
 
 type AppendEntriesReply struct {
-	Term     int
-	Success  bool
-	ServerId int
+	Term    int
+	Success bool
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	reply.ServerId = rf.me
 	reply.Term = rf.currentTerm
 	if args.Term < rf.currentTerm {
 		reply.Success = false
@@ -423,40 +422,45 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 func (rf *Raft) sendAppendEntries() {
 	for peer := range rf.peers {
 		go func(peerId int) {
-			rf.mu.Lock()
-			lastLogIndex := rf.getLastLogIndex()
-			log_temp := rf.logs[rf.matchIndex[peerId]+1 : lastLogIndex+1]
-			logs := make([]LogEntry, len(log_temp))
-			copy(logs, log_temp)
-			args := AppendEntriesArgs{
-				Term:         rf.currentTerm,
-				LeaderId:     rf.me,
-				LogEntries:   logs,
-				PrevLogIndex: rf.matchIndex[peerId],
-				PevLogTerm:   rf.logs[rf.matchIndex[peerId]].Term,
-				LeaderCommit: rf.commitIndex,
-			}
-			rf.mu.Unlock()
-			reply := AppendEntriesReply{}
-			if peerId == rf.me {
-				return
-			}
-
-			rf.peers[peerId].Call("Raft.AppendEntries", &args, &reply)
-
-			rf.mu.Lock()
-			if reply.Term > rf.currentTerm {
-				rf.becomeFollower(reply.Term)
+			if !rf.killed() {
+				rf.mu.Lock()
+				lastLogIndex := rf.getLastLogIndex()
+				log_temp := rf.logs[rf.matchIndex[peerId]+1 : lastLogIndex+1]
+				logs := make([]LogEntry, len(log_temp))
+				copy(logs, log_temp)
+				args := AppendEntriesArgs{
+					Term:         rf.currentTerm,
+					LeaderId:     rf.me,
+					LogEntries:   logs,
+					PrevLogIndex: rf.matchIndex[peerId],
+					PevLogTerm:   rf.logs[rf.matchIndex[peerId]].Term,
+					LeaderCommit: rf.commitIndex,
+				}
 				rf.mu.Unlock()
-				return
+				reply := AppendEntriesReply{}
+				if peerId == rf.me {
+					return
+				}
+
+				rf.peers[peerId].Call("Raft.AppendEntries", &args, &reply)
+
+				rf.mu.Lock()
+				if reply.Term > rf.currentTerm {
+					rf.becomeFollower(reply.Term)
+					rf.mu.Unlock()
+					return
+				}
+				if reply.Success {
+					rf.matchIndex[peerId] = lastLogIndex
+					rf.nextIndex[peerId] = lastLogIndex + 1
+				} else {
+					rf.nextIndex[peerId] = rf.nextIndex[peerId] - 2
+					if rf.nextIndex[peerId] < 0 {
+						rf.nextIndex[peerId] = 0
+					}
+				}
+				rf.mu.Unlock()
 			}
-			if reply.Success {
-				rf.matchIndex[peerId] = lastLogIndex
-				rf.nextIndex[peerId] = lastLogIndex + 1
-			} else {
-				rf.nextIndex[peerId] = rf.nextIndex[peerId] - 1
-			}
-			rf.mu.Unlock()
 		}(peer)
 	}
 }
@@ -502,7 +506,6 @@ func (rf *Raft) ticker() {
 			go rf.updateCommitIndex()
 			rf.mu.Lock()
 		}
-
 		rf.mu.Unlock()
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
@@ -540,7 +543,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.logs = append(rf.logs, LogEntry{Term: 0, Command: nil})
 
 	rf.lastHeartbeatTime = time.Now()
-	rf.electionTimeout = time.Duration(250+(rand.Int63()%300)) * time.Millisecond
+	rf.timeoutConstant = 350
+	rf.electionTimeout = time.Duration(rf.timeoutConstant+(rand.Int63()%300)) * time.Millisecond
 	rf.mu.Unlock()
 
 	// initialize from state persisted before a crash
