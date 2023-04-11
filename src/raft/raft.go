@@ -39,7 +39,6 @@ const (
 // tester) on the same server, via the applyCh passed to Make(). set
 // CommandValid to true to indicate that the ApplyMsg contains a newly
 // committed log entry.
-//
 type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
@@ -109,27 +108,21 @@ func (rf *Raft) GetState() (int, bool) {
 	return term, isleader
 }
 
-//
 // save Raft's persistent state to stable storage,
 // where it can later be retrieved after a crash and restart.
 // see paper's Figure 2 for a description of what should be persistent.
-//
 func (rf *Raft) persist() {
 }
 
-//
 // restore previously persisted state.
-//
 func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
 	}
 }
 
-//
 // A service wants to switch to snapshot.  Only do so if Raft hasn't
 // have more recent info since it communicate the snapshot on applyCh.
-//
 func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
 	return true
 }
@@ -398,13 +391,20 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	reply.Term = rf.currentTerm
 	if args.Term < rf.currentTerm {
 		reply.Success = false
+		return
 	} else {
 		reply.Success = true
 		rf.lastHeartbeatTime = time.Now()
 		rf.state = FOLLOWER
 		rf.currentTerm = args.Term
-		if rf.logs[args.PrevLogIndex].Term != args.PevLogTerm {
+		if args.PrevLogIndex > rf.getLastLogIndex() {
 			reply.Success = false
+			// fmt.Println("Hi")
+			return
+		}
+		if args.PrevLogIndex <= rf.getLastLogIndex() && rf.logs[args.PrevLogIndex].Term != args.PevLogTerm {
+			reply.Success = false
+			// fmt.Println("Hii")
 			return
 		} else {
 			rf.logs = append(rf.logs[0:args.PrevLogIndex+1], args.LogEntries...)
@@ -425,15 +425,20 @@ func (rf *Raft) sendAppendEntries() {
 			if !rf.killed() {
 				rf.mu.Lock()
 				lastLogIndex := rf.getLastLogIndex()
-				log_temp := rf.logs[rf.matchIndex[peerId]+1 : lastLogIndex+1]
+				var log_temp []LogEntry
+				if rf.nextIndex[peerId] <= lastLogIndex {
+					log_temp = rf.logs[rf.nextIndex[peerId] : lastLogIndex+1]
+				} else {
+					log_temp = []LogEntry{}
+				}
 				logs := make([]LogEntry, len(log_temp))
 				copy(logs, log_temp)
 				args := AppendEntriesArgs{
 					Term:         rf.currentTerm,
 					LeaderId:     rf.me,
 					LogEntries:   logs,
-					PrevLogIndex: rf.matchIndex[peerId],
-					PevLogTerm:   rf.logs[rf.matchIndex[peerId]].Term,
+					PrevLogIndex: rf.nextIndex[peerId] - 1,
+					PevLogTerm:   rf.logs[rf.nextIndex[peerId]-1].Term,
 					LeaderCommit: rf.commitIndex,
 				}
 				rf.mu.Unlock()
@@ -455,8 +460,8 @@ func (rf *Raft) sendAppendEntries() {
 					rf.nextIndex[peerId] = lastLogIndex + 1
 				} else {
 					rf.nextIndex[peerId] = rf.nextIndex[peerId] - 2
-					if rf.nextIndex[peerId] < 0 {
-						rf.nextIndex[peerId] = 0
+					if (rf.nextIndex[peerId]) <= 0 {
+						rf.nextIndex[peerId] = 1
 					}
 				}
 				rf.mu.Unlock()
